@@ -1,0 +1,77 @@
+name: nrk-db-stack
+
+services:
+  # ==================== PostgreSQL 18 ====================
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    container_name: ${POSTGRES_CONTAINER_NAME}
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - TZ=${CONTAINER_TIMEZONE}
+    volumes:
+      # ВНИМАНИЕ (PostgreSQL 18+): данные хранятся в /var/lib/postgresql/<версия>/docker.
+      # Монтируем родительский каталог /var/lib/postgresql,
+      # а НЕ старый путь /var/lib/postgresql/data из прошлых гайдов!
+      - ${POSTGRES_VOLUME_PATH}:/var/lib/postgresql
+    ports:
+      # ИСПРАВЛЕНО: было "${POSTGRES_PORT}" — порт не публиковался
+      - "${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # ИСПРАВЛЕНО: было restart_policy (работает только в Swarm)
+    restart: unless-stopped
+
+  # ==================== ClickHouse 26.8 LTS ====================
+  clickhouse:
+    image: ${CLICKHOUSE_IMAGE}
+    container_name: ${CLICKHOUSE_CONTAINER_NAME}
+    environment:
+      # ИСПРАВЛЕНО: теперь DB и USER из .env реально применяются
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - TZ=${CONTAINER_TIMEZONE}
+    ports:
+      - "${CLICKHOUSE_PORT}:8123"      # HTTP API и веб-консоль /play
+      - "${CLICKHOUSE_NATIVE_PORT}:9000"  # native-протокол (clickhouse-client)
+    volumes:
+      # ИСПРАВЛЕНО: убраны монтирования ./clickhouse/config.xml и users.xml —
+      # этих файлов в папке нет, Docker создал бы пустые каталоги поверх
+      # рабочих конфигов, и сервер упал бы при старте
+      - ${CLICKHOUSE_VOLUME_PATH}:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    restart: unless-stopped
+
+  # ==================== Qdrant v1.19 ====================
+  qdrant:
+    image: ${QDRANT_IMAGE}
+    container_name: ${QDRANT_CONTAINER_NAME}
+    ports:
+      - "${QDRANT_API_PORT}:6333"   # REST API и веб-дашборд
+      # ИСПРАВЛЕНО: переменная переименована из QDRANT_RESTICORE_PORT
+      - "${QDRANT_GRPC_PORT}:6334"  # gRPC — нужен Python-клиенту!
+    environment:
+      # ИСПРАВЛЕНО: было QDRANT__SERVICE__ADMIN__USER/PASSWORD — таких настроек
+      # у Qdrant не существует. Единственный способ защиты API — api-key
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+      - TZ=${CONTAINER_TIMEZONE}
+    volumes:
+      # Папка ./data/qdrant лежит внутри файловой системы WSL Ubuntu (ext4),
+      # поэтому bind mount здесь безопасен — риск потери данных относится
+      # только к путям /mnt/c, /mnt/f и \wsl.localhost со стороны Windows
+      - ${QDRANT_VOLUME_PATH}:/qdrant/storage
+      - qdrant-temp-storage:/qdrant/temp_storage
+    restart: unless-stopped
+
+volumes:
+  qdrant-temp-storage:
